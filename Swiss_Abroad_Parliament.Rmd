@@ -1,0 +1,252 @@
+---
+title: "Swiss Abroad Parliament"
+author: "Alexandra Kohler"
+date: "27/06/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(naniar)
+library(rstudioapi)
+library(tidyverse) # ggplot2, dplyr, tidyr, readr, purrr, tibble
+library(magrittr) # pipes
+library(readxl) # excel
+library(scales) # scales for ggplot2
+library(jsonlite) # json
+library(lintr) # code linting
+library(sf) # spatial data handling
+library(rgeos)
+library(rgdal)
+library(rmarkdown)
+library(maps)
+```
+
+## Read in the data and prepare for analysis 
+
+
+```{r parliament}
+
+#-----------------------------
+# READ IN PARLIAMENT DATA 
+
+# set working directory
+setwd("/Users/kohleralexandra/Documents/Projekte 2019/A_Wahlen 2019/Wahlprojekte/Auslandschweizer/scripts")
+# read in data parl_ausl 
+parlausl <- read.csv("/Users/kohleralexandra/Documents/Projekte 2019/A_Wahlen 2019/Wahlprojekte/Auslandschweizer/data/original_parl_ausl.csv", header = TRUE, fill = TRUE)
+
+#----------------------------
+# LOOK at data
+head(parlausl)
+summary(parlausl)
+parlausl <- tbl_df(parlausl)
+length(parlausl$firstname)
+parlausl <- tbl_df(parlausl)
+length(unique(parlausl$bill_id))
+# Es gibt 3399 Zeilen, es gibt 16 bill ids und 17 vote-ids (Abstimmungen)
+# Wir arbeiten mit den bill_ids
+
+#----------------------------
+# FILTER: pos_mp only "0 " and "1", call it parl_short. 
+# we only look at approval and disapproval 
+# from here, keep working with parl_short
+# first unlist and then make numeric values instead of integers
+
+parl_short <- parlausl %>%
+  filter(position_mp == 0 | position_mp == 1)
+length(parl_short$position_ASO)
+length(unique(parl_short$firstname))
+grüne <- parl_short %>% 
+  filter(party_abbreviation == "GPS")
+
+# Rename some of the parties 
+parl_short %<>% 
+  rename(
+    FDP = "FDP-Liberale",
+    CSP = "csp-ow",
+    Grüne = "GPS",
+    GLP = "glp"
+  )
+
+
+
+```
+
+### Analyse data 
+
+```{r parliament}
+
+
+#----------------------------
+# LOOK AT VOTE_IDs, count them and assign the categories 
+
+colnames(parl_short)
+length(unique(parl_short$vote_id))
+length(unique(parl_short$bill_id))
+
+# 16 unique bill-IDs
+# 17 unique vote_ids
+# BILL IDS: 15.3322 16.3219 15.4058 16.0450 16.0410 16.0270 15.4029 15.4142 17.3626 16.0710 18.3007 17.0460 16.0650 17.4710 18.4200 19.3294
+
+# ADD CATEGORIES TO THE DATA 
+# CATEGORIES: 4 Categories  "Uebrige", "E-Voting", "Interessen ASO", "Bankzugang"   
+# Add the column category
+# use case_when / ifelse to tell it which category to add to each row 
+
+category <- c('Bankzugang', 'E-Voting', 'Interessen ASO', 'Medien', 'Uebrige')
+length(category)
+
+# Number of bills per category: 
+# 3 Bankzugang
+# 4 E-Voting
+# 3 ASO-Interessen
+# 2 Medien
+# 4 Uebrige
+
+# Assign the bil-id to the categories
+
+parl_short %<>% mutate(category = case_when(
+    vote_id == "50.13-17020" | vote_id == "50.8-15140" | vote_id == "50.10-15518" ~ "Bankzugang", 
+    vote_id == "50.14-17362" | vote_id == "50.14-17363" | vote_id == "50.5-13865" |  
+    vote_id == "50.18-19112" ~ "E-Voting", 
+    vote_id == "50.10-15824" | vote_id == "50.13-17280" | vote_id == "50.6-14566" ~ "Interessen ASO", 
+    vote_id == "50.6-14282" | vote_id == "50.6-14342"  ~ "Medien", 
+    vote_id == "50.5-13808" | vote_id == "50.14-17330" | vote_id == "50.16-18222" |
+    vote_id == "50.5-13868" | vote_id == "50.9-15371"  ~ "Uebrige",
+    TRUE ~ "NA"
+)) %>%
+  # replace empty strings introduced by case_when to NA  
+  mutate(category = ifelse(category == "NA", NA, category))
+
+
+#Spot check
+look_at_data <- parl_short %>% 
+  filter(category == "Medien")
+look_at_data
+head(parl_short)
+unique(look_at_data$date)
+
+#----------------------------
+# ADD VARIABLE POS_AGREED USING mutate()
+# This Variable shows if the parliament agrees with the ASO - TrUE = yes, FALSE = no 
+parl_short %<>% 
+  mutate(pos_agreed = (position_mp == position_ASO))
+
+# MAKE A SHORTER DATASET JUST TO LOOK AT THE CATEGORIZATION
+parl_short_cat <- parl_short %>%
+  select(vote_id, title_de, category) %>%
+  group_by(vote_id)
+head(parl_short_cat)
+
+# WRITE CSV
+write_csv(parl_short_cat, file = "parlament_auslandschweizer_voteids_categories.csv")
+
+# ADD VARIABLE FULL_NAME USING unite()
+
+parl_short %<>%
+  unite(full_name, c("firstname", "lastname"), sep = " ", remove = FALSE) %>%
+  # don't need these now anymore  
+  select(-firstname, -lastname)
+
+# SELECT the columns that you need 
+parl_short %<>%
+  select(vote_id, bill_id, title_de, date, full_name, party_abbreviation, position_ASO, position_mp, pos_agreed, category, yes_votes, no_votes, canton)
+
+
+
+# beispiel hier https://tidyr.tidyverse.org/reference/unite.html oder hier https://stackoverflow.com/questions/50845474/concatenating-two-text-columns-in-dplyr 
+
+
+#----------------------------
+# WRITE CSV out
+write.csv(parl_short, file = "parlament_auslandschweizer_votings_categories.csv", fileEncoding ="UTF-8")
+
+```
+
+## ANALYSIS 2: FIND OUT OVERALL, PARITES, POLITICIANS THAT AGREE THE MOST AND PER CATEGORY 
+
+PARTIES
+overall 1677 agreed, 1216 disagreed
+SVP 129 agreed, 821 disagreed
+SP 625 agreed, 13 disagreed
+Gruene 139 agreed, 24 disagreed
+FDP 
+CVP
+
+```{r}
+
+# PARTIES 
+parties <- parl_short %>% 
+  group_by(party_abbreviation) %>% 
+  summarise(
+    n_agreed = sum(pos_agreed, na.rm = TRUE),
+    n_disagreed = sum(pos_agreed == FALSE, na.rm = TRUE) 
+  ) %>%
+  # calculate ratio of agrees / disagrees
+  mutate(share_agreed = n_agreed / (n_agreed + n_disagreed))  %>% 
+  arrange(desc(share_agreed)) %>% 
+  mutate(share_percent = share_agreed * 100) %>% 
+  mutate(share__no_percent = 100 - share_percent)
+
+parl_short %<>% 
+  mutate(n_pos_agreed = sum(pos_agreed = TRUE))
+parl_short %<>% 
+  mutate(n_pos_disagreed = sum(pos_agreed = FALSE))
+
+
+# PERSONS: 225 Personen 
+
+persons_rank <- parl_short %>% 
+  group_by(full_name, party_abbreviation) %>% 
+  # create sums of all agrees and disagrees per parliamentarian
+  summarise(
+    n_agreed = sum(pos_agreed, na.rm = TRUE),
+    n_disagreed = sum(pos_agreed == FALSE, na.rm = TRUE) 
+  ) %>%
+  # calculate ratio of agrees / disagrees
+  mutate(share_agreed = n_agreed / (n_agreed + n_disagreed))  %>% 
+  arrange(desc(share_agreed))
+# Overall, the people that were the most Auslandschweizer friendly, are: Barbara Gysi, Claudia Friedl, Edith Graf-Litscher, Mathias Aebischer
+
+
+# CATEGORIES: 4 Categories  "Uebrige", "E-Voting", "Interessen ASO", "Bankzugang"    
+# Overall, the people that were the most Auslandschweizer friendly, are: Barbara Gysi, Claudia Friedl, Edith Graf-Litscher, Mathias Aebischer
+
+categories_rank <- parl_short %>% 
+  group_by(category, party_abbreviation) %>% 
+  # create sums of all agrees and disagrees per parliamentarian
+  summarise(
+    n_agreed = sum(pos_agreed, na.rm = TRUE),
+    n_disagreed = sum(pos_agreed == FALSE, na.rm = TRUE) 
+  ) %>%
+  # calculate ratio of agrees / disagrees
+  mutate(share_agreed = n_agreed / (n_agreed + n_disagreed))  %>% 
+  mutate(share_percent = share_agreed * 100) %>% 
+  mutate(share_no_percent = 100 - share_percent)  %>% 
+  arrange(desc(share_agreed))
+unique(categories_rank$category)
+
+# WRITE CSV ou
+write.csv(categories_rank, file = "parties_evaluation_categories.csv", fileEncoding ="UTF-8")
+
+## Filter nur Bankenzugang
+Banken <- categories_rank %>% 
+  filter(category == "Bankzugang")
+
+## Filter nur Medien
+Medien <- categories_rank %>% 
+  filter(category == "Medien")
+
+# Filter nur ASO Interessen
+ASO <- categories_rank %>% 
+  filter(category == "Interessen ASO")
+
+
+# Filter nur E-Voting
+Evoting <- categories_rank %>% 
+  filter(category == "E-Voting")
+
+
+# Filter nur Uebrige
+Uebrige <- categories_rank %>% 
+  filter(category == "Uebrige")
